@@ -54,7 +54,7 @@ class CThread extends Thread {
 
     @Override
     public void run() {
-        System.out.println("Nove vlakno klienta: " + this.getName());
+        System.out.println("New clieant at thread: " + this.getName());
 
         if (!logIn()) {
             closeConn();
@@ -79,7 +79,7 @@ class CThread extends Thread {
     private boolean logIn() {
         write("200 LOGIN\r\n");
         String login = getRawResponse();
-        System.out.println(login);
+        System.out.println("Entered login" + login.substring(0, login.length() - 2));
         Integer sum = 0;
         for (int i = 0; i < login.length() - 2; i++) {
             sum += (int) login.charAt(i);
@@ -88,7 +88,7 @@ class CThread extends Thread {
         
         write("201 PASSWORD\r\n");        
         String pass = getRawResponse();
-        System.out.println("pass:" + pass);        
+        System.out.println("Entered pass:" + pass);        
         
         
         
@@ -174,7 +174,7 @@ class Server {
             System.exit(-1);
         }
 
-        System.out.println("Server spusten.");
+        System.out.println("Server up.");
 
         while (true) {
             try {
@@ -196,7 +196,7 @@ public class Robot {
             Server server = new Server(Integer.parseInt(args[0]));
             server.run();
         } else {
-            System.out.println("Zadejte cislo portu, jako argument programu.");
+            System.out.println("Usage: java robot <port>");
         }
     }
 }
