@@ -6,10 +6,17 @@ package robot;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedWriter;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.ObjectOutputStream;
 import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.util.Date;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -17,33 +24,22 @@ import java.util.logging.Logger;
  *
  * @author palmyman (Lubomir Cuhel / cuhellub)
  */
-class Response {
-
-    private String command, data;
-
-    public Response(String rawResponse) {
-        this.command = rawResponse.substring(0, 3);
-        this.data = rawResponse.substring(5);
-    }
-
-    public String getCommand() {
-        return command;
-    }
-
-    public String getData() {
-        return data;
-    }
-}
-
 class CThread extends Thread {
 
     private Socket socket;
     private BufferedWriter out;
     private BufferedInputStream in;
+    private int globalCheckSum;
 
     public CThread(Socket socket) {
         super();
         this.socket = socket;
+        this.globalCheckSum = 0;
+        try {
+            this.socket.setSoTimeout(45000);
+        } catch (SocketException ex) {
+            Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
+        }
         try {
             this.out = new BufferedWriter(new OutputStreamWriter(this.socket.getOutputStream()));
             this.in = new BufferedInputStream(this.socket.getInputStream());
@@ -54,49 +50,55 @@ class CThread extends Thread {
 
     @Override
     public void run() {
-        System.out.println("New clieant at thread: " + this.getName());
+        debugLog("New robot");
 
         if (!logIn()) {
+            sendMessage("500 LOGIN FAILED\r\n");
+            debugLog("Robot failed to login");
             closeConn();
             return;
         }
 
-        Response response;
-        String rawResponse;
-        while (((rawResponse = getRawResponse())) != null) {
-            response = new Response(rawResponse);
-            if ("INFO".equals(response.getCommand())) {
-                logInfo();
-                continue;
-            } else {
-                saveFoto();
-                continue;
+        String command;
+        while (true) {
+            sendMessage("202 OK\r\n");
+            command = getCommand();
+            if (command == null) {
+                break;
+            }
+            switch (command) {
+                case "INFO":
+                    logInfo(getRawResponse());
+                    continue;
+                case "FOTO":
+                    getFoto();
+                    continue;
             }
         }
+        sendMessage("501 SYNTAX ERROR\r\n");
+        debugLog("Command syntax error, robot disconnected");
         closeConn();
     }
 
     private boolean logIn() {
-        write("200 LOGIN\r\n");
+        sendMessage("200 LOGIN\r\n");
         String login = getRawResponse();
-        System.out.println("Entered login" + login.substring(0, login.length() - 2));
-        Integer sum = 0;
-        for (int i = 0; i < login.length() - 2; i++) {
-            sum += (int) login.charAt(i);
-        }
-        System.out.println("Expecting pass:" + sum);
-        
-        write("201 PASSWORD\r\n");        
+        int loginCheckSum = globalCheckSum;
+        debugLog("Entered login: " + login.substring(0, login.length() > 30 ? 30 : login.length()));
+        debugLog("Expecting pass: " + loginCheckSum);
+
+        sendMessage("201 PASSWORD\r\n");
         String pass = getRawResponse();
-        System.out.println("Entered pass:" + pass);        
-        
-        
-        
-        if (!pass.substring(0, pass.length() - 2).equals(sum.toString())) {
-            write("500 LOGIN FAILED\r\n");
+
+        if (pass == null || !login.startsWith("Robot")) {
             return false;
         }
-        write("202 OK\r\n");
+        debugLog("Entered pass: " + pass);
+
+        if (Integer.parseInt(pass) != loginCheckSum) {
+            return false;
+        }
+        debugLog("Robot is logged in");
         return true;
     }
 
@@ -114,13 +116,11 @@ class CThread extends Thread {
         StringBuilder sBuilder = new StringBuilder();
         char current;
         int currentCode = 0;
+        globalCheckSum = -('\n' + '\r');
 
         while (true) {
-            try {
-                currentCode = in.read();
-            } catch (IOException ex) {
-                Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
-            }
+            currentCode = getByte();
+            globalCheckSum += currentCode;
 
             if (currentCode < 0) {
                 return null;
@@ -128,7 +128,8 @@ class CThread extends Thread {
 
             current = (char) currentCode;
             sBuilder.append(current);
-            if (sBuilder.length() > 2) {
+
+            if (sBuilder.length() >= 2) {
                 if (sBuilder.charAt(sBuilder.length() - 1) == '\n'
                         && sBuilder.charAt(sBuilder.length() - 2) == '\r') {
                     break;
@@ -136,10 +137,120 @@ class CThread extends Thread {
             }
         }
 
-        return sBuilder.toString();
+        return sBuilder.toString().substring(0, sBuilder.length() - 2);
     }
 
-    private void write(String s) {
+    private String getCommand() {
+        StringBuilder sBuilder = new StringBuilder();
+        char current;
+        int currentCode = 0;
+        String info = "INFO ", foto = "FOTO ";
+
+        for (int i = 0; i < 5; i++) {
+            currentCode = getByte();
+
+            if (currentCode < 0) {
+                return null;
+            }
+
+            current = (char) currentCode;
+            if (current != info.charAt(i) && current != foto.charAt(i)) {
+                return null;
+            }
+
+            sBuilder.append(current);
+        }
+
+        return sBuilder.toString().substring(0, sBuilder.length() - 1);
+    }
+
+    private boolean getFoto() {
+        StringBuilder fotoSizeString = new StringBuilder();
+        char current;
+        int currentCode = 0;
+        int localCheckSum = 0;
+
+        while ((char) (currentCode = getByte()) != ' ') {
+            if (currentCode < '0' || currentCode > '9') {
+                return false;
+            }
+            fotoSizeString.append((char) currentCode);
+        }
+
+        int fotoSize = Integer.parseInt(fotoSizeString.toString());
+        if (fotoSize < 1) {
+            return false;
+        }
+
+        debugLog("Loading foto of " + fotoSize + "B");
+        int threadNumber = Integer.parseInt(getName().substring(7));
+        String fileName = "foto0" + threadNumber + ".png";
+
+        try {
+            FileOutputStream fileOs = new FileOutputStream(fileName);
+            ObjectOutputStream os = new ObjectOutputStream(fileOs);
+            for (int i = 0; i < fotoSize; i++) {
+                currentCode = getByte();
+                localCheckSum += currentCode;
+                if (currentCode < 0) {
+                    return false;
+                }
+                os.writeByte(currentCode);
+            }
+            os.close();
+        } catch (FileNotFoundException ex) {
+            Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (IOException ex) {
+            Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
+        }
+
+        debugLog("Local checksum: " + localCheckSum);
+
+        byte bytes[] = new byte[4];
+        for (int i = 0; i < 4; i++) {
+            bytes[i] = (byte) getByte();
+//            try {
+//                bytes[i] = (byte) in.read();
+//            } catch (SocketTimeoutException ex) {
+//                sendMessage("502 TIMEOUT\r\n");
+//                debugLog("Timeout");
+//                closeConn();
+//                return false;
+//            } catch (IOException ex) {
+//                Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
+//            }
+        }
+
+        int remoteCheckSum = ByteBuffer.wrap(bytes).getInt();
+        debugLog("Remote checksum: " + remoteCheckSum);
+
+        if (remoteCheckSum != localCheckSum) {
+            debugLog("Bad checksum");
+            sendMessage("300 BAD CHECKSUM\r\n");
+            return true;
+        }
+
+        debugLog("Right checksum");
+
+        return true;
+    }
+
+    private char getByte() {
+        int currentCode = 0;
+        try {
+            currentCode = in.read();
+        } catch (SocketTimeoutException ex) {
+            sendMessage("502 TIMEOUT\r\n");
+            debugLog("Timeout");
+            closeConn();
+            return '\0';
+        } catch (IOException ex) {
+            Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return (char) currentCode;
+    }
+
+    private void sendMessage(String s) {
         try {
             out.write(s);
             out.flush();
@@ -148,12 +259,12 @@ class CThread extends Thread {
         }
     }
 
-    private void logInfo() {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    private void debugLog(String message) {
+        System.out.println(new Date() + " " + this.getName() + ": " + message);
     }
 
-    private void saveFoto() {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    private void logInfo(String data) {
+        debugLog("INFO " + data.substring(0, data.length() > 30 ? 30 : data.length()));
     }
 }
 
@@ -174,7 +285,7 @@ class Server {
             System.exit(-1);
         }
 
-        System.out.println("Server up.");
+        System.out.println("Server up at port " + port);
 
         while (true) {
             try {
