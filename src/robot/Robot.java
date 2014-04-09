@@ -36,7 +36,7 @@ class CThread extends Thread {
         this.socket = socket;
         this.globalCheckSum = 0;
         try {
-            this.socket.setSoTimeout(45000);
+            this.socket.setSoTimeout(450000);
         } catch (SocketException ex) {
             Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
         }
@@ -170,8 +170,9 @@ class CThread extends Thread {
         int currentCode = 0;
         int localCheckSum = 0;
 
-        while ((char) (currentCode = getByte()) != ' ') {
+        while ((currentCode = getByte()) != ' ') {
             if (currentCode < '0' || currentCode > '9') {
+                debugLog("While loading foto size");
                 return false;
             }
             fotoSizeString.append((char) currentCode);
@@ -179,6 +180,7 @@ class CThread extends Thread {
 
         int fotoSize = Integer.parseInt(fotoSizeString.toString());
         if (fotoSize < 1) {
+            debugLog("While parsing foto size");
             return false;
         }
 
@@ -193,6 +195,7 @@ class CThread extends Thread {
                 currentCode = getByte();
                 localCheckSum += currentCode;
                 if (currentCode < 0) {
+                    debugLog("While reading foto data");
                     return false;
                 }
                 os.writeByte(currentCode);
@@ -207,18 +210,10 @@ class CThread extends Thread {
         debugLog("Local checksum: " + localCheckSum);
 
         byte bytes[] = new byte[4];
-        for (int i = 0; i < 4; i++) {
-            bytes[i] = (byte) getByte();
-//            try {
-//                bytes[i] = (byte) in.read();
-//            } catch (SocketTimeoutException ex) {
-//                sendMessage("502 TIMEOUT\r\n");
-//                debugLog("Timeout");
-//                closeConn();
-//                return false;
-//            } catch (IOException ex) {
-//                Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
-//            }
+        try {
+            in.read(bytes, 0, 4);
+        } catch (IOException ex) {
+            Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
         }
 
         int remoteCheckSum = ByteBuffer.wrap(bytes).getInt();
