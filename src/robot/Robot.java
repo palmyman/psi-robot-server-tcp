@@ -30,13 +30,14 @@ class CThread extends Thread {
     private BufferedWriter out;
     private BufferedInputStream in;
     private int globalCheckSum;
+    private boolean status = true;
 
     public CThread(Socket socket) {
         super();
         this.socket = socket;
         this.globalCheckSum = 0;
         try {
-            this.socket.setSoTimeout(450000);
+            this.socket.setSoTimeout(45000);
         } catch (SocketException ex) {
             Logger.getLogger(CThread.class.getName()).log(Level.SEVERE, null, ex);
         }
@@ -61,8 +62,9 @@ class CThread extends Thread {
 
         String command;
         while (true) {
+            if(!status) break;
             sendMessage("202 OK\r\n");
-            command = getCommand();
+            command = getMessage();
             if (command == null) {
                 break;
             }
@@ -123,6 +125,7 @@ class CThread extends Thread {
             globalCheckSum += currentCode;
 
             if (currentCode < 0) {
+                status = false;
                 return null;
             }
 
@@ -140,7 +143,7 @@ class CThread extends Thread {
         return sBuilder.toString().substring(0, sBuilder.length() - 2);
     }
 
-    private String getCommand() {
+    private String getMessage() {
         StringBuilder sBuilder = new StringBuilder();
         char current;
         int currentCode = 0;
@@ -150,11 +153,13 @@ class CThread extends Thread {
             currentCode = getByte();
 
             if (currentCode < 0) {
+                status = false;
                 return null;
             }
 
             current = (char) currentCode;
             if (current != info.charAt(i) && current != foto.charAt(i)) {
+                status = false;
                 return null;
             }
 
@@ -173,6 +178,7 @@ class CThread extends Thread {
         while ((currentCode = getByte()) != ' ') {
             if (currentCode < '0' || currentCode > '9') {
                 debugLog("While loading foto size");
+                status = false;
                 return false;
             }
             fotoSizeString.append((char) currentCode);
@@ -181,6 +187,7 @@ class CThread extends Thread {
         int fotoSize = Integer.parseInt(fotoSizeString.toString());
         if (fotoSize < 1) {
             debugLog("While parsing foto size");
+            status = false;
             return false;
         }
 
@@ -196,6 +203,7 @@ class CThread extends Thread {
                 localCheckSum += currentCode;
                 if (currentCode < 0) {
                     debugLog("While reading foto data");
+                    status = false;
                     return false;
                 }
                 os.writeByte(currentCode);
